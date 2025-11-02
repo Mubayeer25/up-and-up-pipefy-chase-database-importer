@@ -37,6 +37,9 @@ AGENCY_PRODUCT_TABLE_MAP = {
     "9": "306759853",  # Levergy
 }
 
+# Cache for Done phase IDs by table
+DONE_PHASE_CACHE = {}
+
 # API Endpoints
 API_CONFIGS = config.get("Chase_API_Endpoints", "CONFIGS", fallback="/api/Config")
 API_CLIENTS = config.get("Chase_API_Endpoints", "CLIENTS", fallback="/api/Client")
@@ -128,6 +131,54 @@ def pipefy_post(payload):
         else:
             log(f"ERROR: Pipefy API call failed after {max_retries} attempts.")
             return {"errors": [{"message": "Pipefy API call failed after multiple retries"}]}
+
+def get_done_phase_id(table_id):
+    """Fetches the 'Done' phase ID for a given table. Returns None if not found."""
+    if table_id in DONE_PHASE_CACHE:
+        return DONE_PHASE_CACHE[table_id]
+    
+    log(f"Fetching 'Done' phase ID for table {table_id}...")
+    
+    query = """
+    query ($table_id: ID!) {
+      table(id: $table_id) {
+        phases {
+          id
+          name
+        }
+      }
+    }
+    """
+    
+    payload = {
+        "query": query,
+        "variables": {"table_id": table_id}
+    }
+    
+    response = pipefy_post(payload)
+    
+    if not response or "errors" in response:
+        log(f"ERROR: Failed to fetch phases for table {table_id}. Response: {response}")
+        return None
+    
+    phases = response.get("data", {}).get("table", {}).get("phases", [])
+    
+    # Look for a phase named "Done" (case-insensitive)
+    done_phase = None
+    for phase in phases:
+        phase_name = phase.get("name", "").strip().lower()
+        if phase_name == "done":
+            done_phase = phase.get("id")
+            break
+    
+    if done_phase:
+        log(f"Found 'Done' phase ID for table {table_id}: {done_phase}")
+        DONE_PHASE_CACHE[table_id] = done_phase
+    else:
+        log(f"WARNING: No 'Done' phase found for table {table_id}. Available phases: {[p.get('name') for p in phases]}")
+        DONE_PHASE_CACHE[table_id] = None
+    
+    return done_phase
 
 def get_pipefy_table_records(table_id, fields_to_get=None):
     """Fetches all records from the specified Pipefy table with pagination."""
@@ -297,8 +348,19 @@ def build_pipefy_mutations(records, table_id, action, field_mapping):
             if not pipefy_record_id:
                 log(f"Skipping record archive: Missing 'pipefy_record_id'")
                 continue
-            mutation_body = f'updateFieldsValues(input: {{nodeId: "{pipefy_record_id}", values: [{{fieldId: "status", value: "Archived"}}] }}) {{ clientMutationId }}'
-            mutations.append(f"mut_{unique_suffix}: {mutation_body}")
+            
+            # Get the Done phase ID for this table
+            done_phase_id = get_done_phase_id(table_id)
+            
+            if done_phase_id:
+                # Move record to Done phase using updateTableRecordField
+                mutation_body = f'updateTableRecordField(input: {{table_record_id: "{pipefy_record_id}", field_id: "current_phase", new_value: "{done_phase_id}"}}) {{ table_record {{ id }} }}'
+                mutations.append(f"mut_{unique_suffix}: {mutation_body}")
+            else:
+                # Fallback: Just update status to Archived if no Done phase found
+                log(f"WARNING: No Done phase found for table {table_id}. Using status field fallback for record {pipefy_record_id}")
+                mutation_body = f'updateFieldsValues(input: {{nodeId: "{pipefy_record_id}", values: [{{fieldId: "status", value: "Archived"}}] }}) {{ clientMutationId }}'
+                mutations.append(f"mut_{unique_suffix}: {mutation_body}")
 
     return mutations
 
@@ -316,6 +378,10 @@ def execute_pipefy_mutations(mutations):
         full_mutation_string = f"mutation {{ {' '.join(batch)} }}"
         payload = {"query": full_mutation_string}
         log(f"Executing batch {i//batch_size + 1}/{(len(mutations) + batch_size - 1)//batch_size} ({len(batch)} mutations)...")
+        
+        # Debug: Log the actual mutation for small batches
+        if len(batch) <= 3:
+            log(f"DEBUG: Mutation query: {full_mutation_string[:500]}...")
         
         response = pipefy_post(payload)
         
