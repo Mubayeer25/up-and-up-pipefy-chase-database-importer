@@ -283,7 +283,9 @@ def build_pipefy_mutations(records, table_id, action, field_mapping):
             
             # Determine the title value
             title_value = ""
-            if "product_name" in record:
+            if "client_name" in record: # <-- ADDED THIS
+                title_value = sanitize_graphql_string(record.get("client_name"))
+            elif "product_name" in record:
                 title_value = sanitize_graphql_string(record.get("product_name"))
             elif "business_unit_name" in record:
                 title_value = sanitize_graphql_string(record.get("business_unit_name"))
@@ -315,7 +317,9 @@ def build_pipefy_mutations(records, table_id, action, field_mapping):
             # Check if title needs updating
             current_title = record.get("current_title", "")
             new_title = ""
-            if "product_name" in record:
+            if "client_name" in record: # <-- ADDED THIS
+                new_title = sanitize_graphql_string(record.get("client_name"))
+            elif "product_name" in record:
                 new_title = sanitize_graphql_string(record.get("product_name"))
             elif "business_unit_name" in record:
                 new_title = sanitize_graphql_string(record.get("business_unit_name"))
