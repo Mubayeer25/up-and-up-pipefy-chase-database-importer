@@ -348,9 +348,13 @@ def execute_pipefy_mutations(mutations):
             
             for alias, result in data.items():
                 if result is None:
+                    # Mutation returned null - this is a failure
                     null_count += 1
                     fail_aliases.append(alias)
-                elif isinstance(result, dict) and (result.get("table_record") or result.get("clientMutationId") is not None):
+                elif isinstance(result, dict):
+                    # Mutation returned a dict - this is success
+                    # (updateFieldsValues returns {"clientMutationId": null} on success)
+                    # (createTableRecord returns {"table_record": {...}} on success)
                     success_count += 1
                 else:
                     # Unexpected result structure
