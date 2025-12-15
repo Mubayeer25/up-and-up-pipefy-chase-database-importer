@@ -312,8 +312,7 @@ def build_pipefy_mutations(records, table_id, action, field_mapping):
                 for key in field_mapping["fields"]
                 if key not in key_identifiers and key not in title_keys and key in record
             }
-            record_status = record.get("status", "Active")
-            fields_to_set["status"] = sanitize_graphql_string(record_status)
+            fields_to_set["status"] = sanitize_graphql_string(record.get("status", "Active"))
 
             # Check if title needs updating
             current_title = record.get("current_title", "")
@@ -346,15 +345,6 @@ def build_pipefy_mutations(records, table_id, action, field_mapping):
                 if title_needs_update:
                     title_mutation = f'updateTableRecord(input: {{id: "{pipefy_record_id}", title: "{new_title}"}}) {{ table_record {{ id }} }}'
                     mutations.append(f"mut_{unique_suffix}_ttl: {title_mutation}")
-                
-                # If status is Archived, also move record to Done phase
-                if record_status == "Archived":
-                    done_phase_id = get_done_phase_id(table_id)
-                    if done_phase_id:
-                        phase_mutation = f'updateTableRecordField(input: {{table_record_id: "{pipefy_record_id}", field_id: "current_phase", new_value: "{done_phase_id}"}}) {{ table_record {{ id }} }}'
-                        mutations.append(f"mut_{unique_suffix}_phase: {phase_mutation}")
-                    else:
-                        log(f"WARNING: No Done phase found for table {table_id}. Record {pipefy_record_id} status set to Archived but phase not changed.")
             else:
                 log(f"Skipping update for record {pipefy_record_id}, no changes detected.")
 
@@ -514,18 +504,14 @@ def sync_table(chase_data_list, pipefy_table_id, field_mapping):
             if new_title and current_title != new_title:
                 needs_update = True
             
-            # Check if status needs to change (either re-activate or archive)
-            chase_status = chase_record.get('status', 'Active')
-            pipefy_status = pipefy_record.get('status', '')
-            if chase_status != pipefy_status:
+            if pipefy_record.get('status') != "Active":
                 needs_update = True
 
             if needs_update:
                 update_data = chase_record.copy()
                 update_data['pipefy_record_id'] = pipefy_record['pipefy_record_id']
                 update_data['current_title'] = current_title
-                # Use the status from Chase data (will be "Archived" for IsActive=0)
-                update_data['status'] = chase_status
+                update_data['status'] = "Active"
                 to_update.append(update_data)
 
     for pipefy_key, pipefy_record in pipefy_map.items():
@@ -666,13 +652,6 @@ def main():
                 if not client_id:
                     continue
 
-                # Determine status based on client's IsActive field
-                client_is_active = client.get("IsActive", 1)  # Default to 1 (active) if not present
-                client_status = "Active" if client_is_active == 1 else "Archived"
-                
-                if client_status == "Archived":
-                    log(f"Info: Client {client_id} ({client.get('ClientName')}) is inactive (IsActive=0), marking as Archived")
-
                 products = chase_api_get(f"{API_PRODUCTS}/CustomerID/{client_id}", config_id=config_id)
                 if isinstance(products, list):
                     if not products:
@@ -688,7 +667,7 @@ def main():
                             "product_id": prod_id,
                             "product_name": product.get("ProductName"),
                             "contact_name": product.get("ContactName"),
-                            "status": client_status  # Use client's IsActive status
+                            "status": "Active"
                         }
                         all_products_clients_by_config[config_id_str].append(prod_client_data)
                 else:
